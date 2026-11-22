@@ -1,0 +1,60 @@
+name: Build VirtualBox 5.2.30 (ALC888 identity probe)
+
+on:
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: Parallel kmk jobs (start conservatively on the legacy toolchain)
+        required: false
+        default: "2"
+  push:
+    paths:
+      - "scripts/**"
+      - "tests/**"
+      - ".github/workflows/build-vbox-5.2.30.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    # This label must be assigned to a prepared Windows x64 self-hosted runner.
+    runs-on: [self-hosted, windows, x64, vbox52]
+    timeout-minutes: 360
+    steps:
+      - name: Checkout overlay
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test patcher
+        shell: pwsh
+        run: python -m unittest discover -s tests -v
+
+      - name: Download and verify VirtualBox 5.2.30 source
+        id: source
+        shell: pwsh
+        run: python scripts/prepare_source.py --dest "$env:RUNNER_TEMP\vbox-5.2.30"
+
+      - name: Apply experimental ALC888 identity probe
+        shell: pwsh
+        run: python scripts/patch_alc888_probe.py --source-root "${{ steps.source.outputs.source_root }}"
+
+      - name: Build VBoxDD.dll
+        shell: pwsh
+        run: |
+          $jobs = 2
+          if ('${{ inputs.jobs }}' -match '^\d+$' -and [int]'${{ inputs.jobs }}' -gt 0) { $jobs = [int]'${{ inputs.jobs }}' }
+          ./scripts/build_windows.ps1 -SourceRoot "${{ steps.source.outputs.source_root }}" -Jobs $jobs
+
+      - name: Upload VBoxDD.dll and patch diff
+        uses: actions/upload-artifact@v4
+        with:
+          name: VBoxDD-5.2.30-ALC888-probe
+          if-no-files-found: error
+          path: |
+            artifacts/VBoxDD.dll
+            ${{ runner.temp }}/vbox-5.2.30/source/**/alc888-identity-probe.patch
